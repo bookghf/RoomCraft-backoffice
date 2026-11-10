@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { edgeOf, moveWall, zoneSize } from "@/lib/planEdit";
+import { edgeOf, moveWall, placeOpening, zoneSize, type Opening, type OpeningType } from "@/lib/planEdit";
 import type { PlanSpec, XZ } from "@/lib/types";
 
 export interface PreviewItem {
@@ -53,11 +53,29 @@ interface Drag {
 /**
  * Top-down drawing of a plan, in metres: X to the right, Z down, like the editor's 2D view.
  * Items rotate by -rot because the apps rotate about +Y.
- * With `onChange`, every wall gets a handle that drags it in or out to resize the room.
+ * With `onChange`, every wall gets a handle that drags it in or out to resize the room,
+ * and openings can be clicked to select them. With a `tool`, clicking a wall adds that opening.
  */
-export default function PlanPreview({ spec, items = [], className = "", onChange }: { spec: PlanSpec; items?: PreviewItem[]; className?: string; onChange?: (spec: PlanSpec) => void }) {
+export default function PlanPreview({
+  spec,
+  items = [],
+  className = "",
+  onChange,
+  tool = null,
+  selectedOpening = null,
+  onSelectOpening,
+}: {
+  spec: PlanSpec;
+  items?: PreviewItem[];
+  className?: string;
+  onChange?: (spec: PlanSpec) => void;
+  tool?: OpeningType | null;
+  selectedOpening?: number | null;
+  onSelectOpening?: (index: number | null) => void;
+}) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
+  const [ghost, setGhost] = useState<Opening | null>(null);
   const pts = spec.zones.flatMap((z) => z.polygon);
   if (!pts.length) return <div className="p-6 text-center text-sm text-muted">No zones to draw.</div>;
   const xs = pts.map((p) => p[0]);
@@ -83,6 +101,11 @@ export default function PlanPreview({ spec, items = [], className = "", onChange
     setDrag({ zone, edge, start, spec, box });
   };
   const onMove = (e: React.PointerEvent) => {
+    if (tool) {
+      const p = toPlan(e);
+      setGhost(p ? placeOpening(spec, tool, p) : null);
+      return;
+    }
     if (!drag || !onChange) return;
     const p = toPlan(e);
     const ed = edgeOf(drag.spec, drag.zone, drag.edge);
@@ -92,6 +115,21 @@ export default function PlanPreview({ spec, items = [], className = "", onChange
     if (next) onChange(next);
   };
   const onUp = () => setDrag(null);
+  const onBackgroundDown = (e: React.PointerEvent) => {
+    if (!onChange) return;
+    if (!tool) return onSelectOpening?.(null);
+    const p = toPlan(e);
+    const o = p && placeOpening(spec, tool, p);
+    if (!o) return;
+    onChange({ ...spec, openings: [...spec.openings, o] });
+    onSelectOpening?.(spec.openings.length);
+    setGhost(null);
+  };
+  const openingLine = (o: Opening) => {
+    const [dx, dz] = wallDir(spec, o.at);
+    const hw = o.width / 2;
+    return { x1: o.at[0] - dx * hw, y1: o.at[1] - dz * hw, x2: o.at[0] + dx * hw, y2: o.at[1] + dz * hw };
+  };
   const dragged = drag ? spec.zones[drag.zone] : undefined;
 
   return (
@@ -104,6 +142,9 @@ export default function PlanPreview({ spec, items = [], className = "", onChange
       onPointerMove={onMove}
       onPointerUp={onUp}
       onPointerCancel={onUp}
+      onPointerDown={onBackgroundDown}
+      onPointerLeave={() => setGhost(null)}
+      style={tool ? { cursor: ghost ? "copy" : "not-allowed" } : undefined}
     >
       <rect x={minX} y={minZ} width={w} height={h} fill="#fff" />
       {spec.zones.map((z) => (
@@ -158,6 +199,7 @@ export default function PlanPreview({ spec, items = [], className = "", onChange
         );
       })}
       {onChange &&
+        !tool &&
         spec.zones.map((z, zi) =>
           z.polygon.map((_, ei) => {
             const ed = edgeOf(spec, zi, ei);
@@ -178,6 +220,23 @@ export default function PlanPreview({ spec, items = [], className = "", onChange
             );
           }),
         )}
+      {onChange &&
+        !tool &&
+        spec.openings.map((o, i) => (
+          <g
+            key={`o-${i}`}
+            style={{ cursor: "pointer" }}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              onSelectOpening?.(i);
+            }}
+          >
+            <title>{`${o.type} · ${o.width} m (click to edit)`}</title>
+            {i === selectedOpening && <line {...openingLine(o)} stroke="#1f1d1a" strokeWidth={0.26} strokeOpacity={0.35} strokeLinecap="round" />}
+            <line {...openingLine(o)} stroke="transparent" strokeWidth={0.4} />
+          </g>
+        ))}
+      {ghost && <line {...openingLine(ghost)} stroke={OPENING_COLOR[ghost.type] ?? "#999"} strokeWidth={0.14} strokeOpacity={0.55} style={{ pointerEvents: "none" }} />}
       {dragged && (() => {
         const sz = zoneSize(dragged.polygon);
         const cx = dragged.polygon.reduce((s, p) => s + p[0], 0) / dragged.polygon.length;

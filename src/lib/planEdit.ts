@@ -40,7 +40,8 @@ function onSegment(p: XZ, a: XZ, b: XZ, tol = 0.05) {
 
 /**
  * Move one wall (a zone edge) along its normal by `dist` metres, snapped to 5 cm.
- * Corners on the wall (in any zone), openings on the wall and open (wall-less) edges move with it.
+ * Only the dragged zone changes: neighbouring zones keep their shape even when they share the wall.
+ * Openings on the wall and open (wall-less) edges along it move with it.
  * Returns null when the move would collapse or flip a zone.
  */
 export function moveWall(spec: PlanSpec, zone: number, edge: number, dist: number): PlanSpec | null {
@@ -49,10 +50,9 @@ export function moveWall(spec: PlanSpec, zone: number, edge: number, dist: numbe
   const d = Math.round(dist / SNAP) * SNAP;
   const off: XZ = [e.n[0] * d, e.n[1] * d];
   const shift = (p: XZ): XZ => [round(p[0] + off[0]), round(p[1] + off[1])];
-  // Any corner on the wall moves, so a neighbouring zone that shares the wall keeps its shape.
   const moves = (p: XZ) => same(p, e.a) || same(p, e.b) || onSegment(p, e.a, e.b, EPS);
 
-  const zones = spec.zones.map((z) => ({ ...z, polygon: z.polygon.map((p) => (moves(p) ? shift(p) : p)) }));
+  const zones = spec.zones.map((z, i) => (i === zone ? { ...z, polygon: z.polygon.map((p) => (moves(p) ? shift(p) : p)) } : z));
   for (let i = 0; i < zones.length; i++) {
     const before = polygonArea(spec.zones[i].polygon);
     const after = polygonArea(zones[i].polygon);
@@ -78,4 +78,91 @@ export function moveWall(spec: PlanSpec, zone: number, edge: number, dist: numbe
 export function zoneSize(poly: XZ[]): { w: number; d: number } {
   const xs = poly.map((p) => p[0]), zs = poly.map((p) => p[1]);
   return { w: round(Math.max(...xs) - Math.min(...xs)), d: round(Math.max(...zs) - Math.min(...zs)) };
+}
+
+export type OpeningType = "door" | "window" | "slider";
+export type Opening = PlanSpec["openings"][number];
+
+/** Defaults match what the apps assume when height or sill is left out. */
+export const OPENING_DEFAULTS: Record<OpeningType, Omit<Opening, "at">> = {
+  door: { type: "door", width: 0.9 },
+  window: { type: "window", width: 1.2, sill: 0.9, height: 1.2 },
+  slider: { type: "slider", width: 1.8 },
+};
+
+interface WallHit {
+  a: XZ;
+  b: XZ;
+  len: number;
+  /** Distance along the wall from a. */
+  t: number;
+}
+
+/** The wall closest to p, if p is within `tol` metres of one. */
+function nearestWall(spec: PlanSpec, p: XZ, tol = 0.35): WallHit | null {
+  let best: (WallHit & { dist: number }) | null = null;
+  for (const z of spec.zones) {
+    for (let i = 0; i < z.polygon.length; i++) {
+      const a = z.polygon[i];
+      const b = z.polygon[(i + 1) % z.polygon.length];
+      const dx = b[0] - a[0], dz = b[1] - a[1];
+      const len = Math.hypot(dx, dz);
+      if (!len) continue;
+      const t = Math.min(Math.max(((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / len, 0), len);
+      const dist = Math.hypot(a[0] + (dx / len) * t - p[0], a[1] + (dz / len) * t - p[1]);
+      if (dist <= tol && (!best || dist < best.dist)) best = { a, b, len, t, dist };
+    }
+  }
+  return best;
+}
+
+/** Where along its wall an opening sits: [start, end] in metres from the wall's start, or null if it is on another wall. */
+function spanOn(o: Opening, w: WallHit): [number, number] | null {
+  const dx = (w.b[0] - w.a[0]) / w.len, dz = (w.b[1] - w.a[1]) / w.len;
+  const t = (o.at[0] - w.a[0]) * dx + (o.at[1] - w.a[1]) * dz;
+  const off = Math.abs((o.at[0] - w.a[0]) * -dz + (o.at[1] - w.a[1]) * dx);
+  if (off > 0.05 || t < -0.05 || t > w.len + 0.05) return null;
+  return [t - o.width / 2, t + o.width / 2];
+}
+
+/**
+ * A new opening of `type` centred where p falls on the nearest wall, snapped to 5 cm and kept
+ * inside the wall. Null when p is not near a wall, the wall is too short, or it would overlap another opening.
+ */
+export function placeOpening(spec: PlanSpec, type: OpeningType, p: XZ): Opening | null {
+  const w = nearestWall(spec, p);
+  if (!w || w.len < 0.5) return null;
+  const def = OPENING_DEFAULTS[type];
+  const width = round(Math.min(def.width, w.len - 0.2));
+  const half = width / 2;
+  const t = Math.min(Math.max(Math.round(w.t / SNAP) * SNAP, half + 0.05), w.len - half - 0.05);
+  const at: XZ = [round(w.a[0] + ((w.b[0] - w.a[0]) / w.len) * t), round(w.a[1] + ((w.b[1] - w.a[1]) / w.len) * t)];
+  const overlaps = spec.openings.some((o) => {
+    const s = spanOn(o, w);
+    return s && s[0] < t + half && s[1] > t - half;
+  });
+  return overlaps ? null : { ...def, width, at };
+}
+
+export function addOpening(spec: PlanSpec, o: Opening): PlanSpec {
+  return { ...spec, openings: [...spec.openings, o] };
+}
+
+export function removeOpening(spec: PlanSpec, index: number): PlanSpec {
+  return { ...spec, openings: spec.openings.filter((_, i) => i !== index) };
+}
+
+/** Change an opening's type or size. Switching type resets sill/height to that type's defaults. */
+export function updateOpening(spec: PlanSpec, index: number, patch: Partial<Omit<Opening, "at">>): PlanSpec {
+  return {
+    ...spec,
+    openings: spec.openings.map((o, i) => {
+      if (i !== index) return o;
+      if (patch.type && patch.type !== o.type) {
+        const { width, at } = o;
+        return { ...OPENING_DEFAULTS[patch.type as OpeningType], ...patch, width: patch.width ?? width, at };
+      }
+      return { ...o, ...patch };
+    }),
+  };
 }
