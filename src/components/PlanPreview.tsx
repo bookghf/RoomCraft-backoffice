@@ -48,8 +48,8 @@ function inside(x: number, z: number, poly: XZ[]) {
 const polyArea = (poly: XZ[]) => Math.abs(poly.reduce((s, a, i) => { const b = poly[(i + 1) % poly.length]; return s + a[0] * b[1] - b[0] * a[1]; }, 0) / 2);
 
 /**
- * How an opening meets the floor, matching the apps: doors swing into the larger room on their wall,
- * hinged at the end with the smaller x (or z); sliders keep a 60 cm walkway on each side.
+ * Which way a door swings, matching the apps: into the larger room on its wall,
+ * hinged at the end with the smaller x (or z).
  */
 function openingFloor(spec: PlanSpec, o: PlanSpec["openings"][number]) {
   let [dx, dz] = wallDir(spec, o.at);
@@ -58,7 +58,7 @@ function openingFloor(spec: PlanSpec, o: PlanSpec["openings"][number]) {
   const zoneOn = (sg: number) => spec.zones.find((z) => inside(o.at[0] + n[0] * sg * 0.05, o.at[1] + n[1] * sg * 0.05, z.polygon));
   const plus = zoneOn(1), minus = zoneOn(-1);
   const sign = (plus ? polyArea(plus.polygon) : -1) >= (minus ? polyArea(minus.polygon) : -1) ? 1 : -1;
-  return { dir: [dx, dz] as XZ, n, sign, sides: [plus ? 1 : 0, minus ? -1 : 0].filter(Boolean) };
+  return { dir: [dx, dz] as XZ, n, sign };
 }
 
 interface Box {
@@ -222,18 +222,6 @@ export default function PlanPreview({
               <path d={`M ${h[0]} ${h[1]} L ${end[0]} ${end[1]} A ${r} ${r} 0 0 ${sweep} ${closed[0]} ${closed[1]} Z`} fill="#b07a4a" fillOpacity={0.08} stroke="none" />
               <path d={`M ${end[0]} ${end[1]} A ${r} ${r} 0 0 ${sweep} ${closed[0]} ${closed[1]}`} fill="none" stroke="#b07a4a" strokeWidth={0.02} strokeDasharray="0.06 0.04" />
               <line x1={h[0]} y1={h[1]} x2={end[0]} y2={end[1]} stroke="#8a5a32" strokeWidth={0.035} />
-            </g>
-          );
-        }
-        if (o.type === "slider") {
-          return (
-            <g key={`sw${i}`} style={{ pointerEvents: "none" }}>
-              {f.sides.map((sg) => {
-                const a: XZ = [o.at[0] - f.dir[0] * hw + f.n[0] * sg * T, o.at[1] - f.dir[1] * hw + f.n[1] * sg * T];
-                const b: XZ = [o.at[0] + f.dir[0] * hw + f.n[0] * sg * T, o.at[1] + f.dir[1] * hw + f.n[1] * sg * T];
-                const k = 0.6 * sg;
-                return <polygon key={sg} points={[a, b, [b[0] + f.n[0] * k, b[1] + f.n[1] * k], [a[0] + f.n[0] * k, a[1] + f.n[1] * k]].map((p) => p.join(",")).join(" ")} fill="#3c9d8f" fillOpacity={0.07} stroke="#3c9d8f" strokeOpacity={0.5} strokeWidth={0.015} strokeDasharray="0.06 0.04" />;
-              })}
             </g>
           );
         }
