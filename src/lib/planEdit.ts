@@ -158,11 +158,86 @@ export function updateOpening(spec: PlanSpec, index: number, patch: Partial<Omit
     ...spec,
     openings: spec.openings.map((o, i) => {
       if (i !== index) return o;
-      if (patch.type && patch.type !== o.type) {
+      if (patch.type && baseType(patch.type) !== baseType(o.type)) {
         const { width, at } = o;
-        return { ...OPENING_DEFAULTS[patch.type as OpeningType], ...patch, width: patch.width ?? width, at };
+        return { ...OPENING_DEFAULTS[baseType(patch.type)], ...patch, width: patch.width ?? width, at };
       }
       return { ...o, ...patch };
     }),
   };
+}
+
+/**
+ * Door swing, stored in the opening type as the apps read it: "door:<in|out>:<left|right>".
+ * "in" opens into the larger room on the door's wall; left/right is the hinge side seen from
+ * that room, facing the door. A plain "door" opens in, hinged at the end with the smaller x (or z).
+ */
+export interface DoorSwing {
+  dir: "in" | "out";
+  hinge: "left" | "right";
+}
+
+/** "door", "window" or "slider", whatever swing a door type carries. */
+export function baseType(type: string): OpeningType {
+  return type.split(":")[0] as OpeningType;
+}
+
+export function storedSwing(type: string): DoorSwing | null {
+  const [base, dir, hinge] = type.split(":");
+  return base === "door" && (dir === "in" || dir === "out") && (hinge === "left" || hinge === "right") ? { dir, hinge } : null;
+}
+
+/** Direction of the zone edge an opening sits on. */
+export function wallDir(spec: PlanSpec, at: XZ): XZ {
+  for (const z of spec.zones) {
+    for (let i = 0; i < z.polygon.length; i++) {
+      const a = z.polygon[i];
+      const b = z.polygon[(i + 1) % z.polygon.length];
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (!len) continue;
+      const cross = (b[0] - a[0]) * (at[1] - a[1]) - (b[1] - a[1]) * (at[0] - a[0]);
+      const dot = (at[0] - a[0]) * (b[0] - a[0]) + (at[1] - a[1]) * (b[1] - a[1]);
+      if (Math.abs(cross / len) < 0.05 && dot >= 0 && dot <= len * len) return [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
+    }
+  }
+  return [1, 0];
+}
+
+function inside(x: number, z: number, poly: XZ[]) {
+  let hit = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, zi] = poly[i];
+    const [xj, zj] = poly[j];
+    if (zi > z !== zj > z && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) hit = !hit;
+  }
+  return hit;
+}
+
+const HALF_WALL = 0.06;
+
+/**
+ * Where a door's leaf turns, matching the apps: the hinge point (on the wall face it opens towards),
+ * the leaf direction when closed, the direction it opens to, and the swing as stored or the default.
+ */
+export function doorGeometry(spec: PlanSpec, o: Opening): { hinge: XZ; leaf: XZ; open: XZ; radius: number; swing: DoorSwing } {
+  let [dx, dz] = wallDir(spec, o.at);
+  if (dx < -1e-6 || (Math.abs(dx) < 1e-6 && dz < 0)) [dx, dz] = [-dx, -dz];
+  const n: XZ = [-dz, dx];
+  const zoneOn = (sg: number) => spec.zones.find((z) => inside(o.at[0] + n[0] * sg * 0.05, o.at[1] + n[1] * sg * 0.05, z.polygon));
+  const plus = zoneOn(1), minus = zoneOn(-1);
+  const sign = (plus ? Math.abs(polygonArea(plus.polygon)) : -1) >= (minus ? Math.abs(polygonArea(minus.polygon)) : -1) ? 1 : -1;
+  const inward: XZ = [n[0] * sign, n[1] * sign];
+  const left: XZ = [-inward[1], inward[0]];
+  const stored = storedSwing(o.type);
+  // A plain door hinges at the wall start (smaller x or z); say which side that is.
+  const swing: DoorSwing = stored ?? { dir: "in", hinge: left[0] * -dx + left[1] * -dz > 0 ? "left" : "right" };
+  const toHinge: XZ = swing.hinge === "left" ? left : [-left[0], -left[1]];
+  const open: XZ = swing.dir === "out" ? [-inward[0], -inward[1]] : inward;
+  const hw = o.width / 2;
+  const hinge: XZ = [o.at[0] + toHinge[0] * hw + open[0] * HALF_WALL, o.at[1] + toHinge[1] * hw + open[1] * HALF_WALL];
+  return { hinge, leaf: [-toHinge[0], -toHinge[1]], open, radius: o.width, swing };
+}
+
+export function setDoorSwing(spec: PlanSpec, index: number, swing: DoorSwing): PlanSpec {
+  return { ...spec, openings: spec.openings.map((o, i) => (i === index ? { ...o, type: `door:${swing.dir}:${swing.hinge}` } : o)) };
 }

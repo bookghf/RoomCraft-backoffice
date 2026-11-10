@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { edgeOf, moveWall, placeOpening, zoneSize, type Opening, type OpeningType } from "@/lib/planEdit";
+import { baseType, doorGeometry, edgeOf, moveWall, placeOpening, wallDir, zoneSize, type Opening, type OpeningType } from "@/lib/planEdit";
 import type { PlanSpec, XZ } from "@/lib/types";
 
 export interface PreviewItem {
@@ -18,48 +18,6 @@ export interface PreviewItem {
 
 const ZONE_FILL: Record<string, string> = { room: "#f4efe6", kitchen: "#eef3f1", bath: "#e6eef3", balcony: "#ebebe8" };
 const OPENING_COLOR: Record<string, string> = { door: "#b07a4a", window: "#5b9bd5", slider: "#3c9d8f" };
-
-/** Direction of the zone edge an opening sits on, so it can be drawn along the wall. */
-function wallDir(spec: PlanSpec, at: XZ): XZ {
-  for (const z of spec.zones) {
-    for (let i = 0; i < z.polygon.length; i++) {
-      const a = z.polygon[i];
-      const b = z.polygon[(i + 1) % z.polygon.length];
-      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
-      if (!len) continue;
-      const cross = (b[0] - a[0]) * (at[1] - a[1]) - (b[1] - a[1]) * (at[0] - a[0]);
-      const dot = (at[0] - a[0]) * (b[0] - a[0]) + (at[1] - a[1]) * (b[1] - a[1]);
-      if (Math.abs(cross / len) < 0.05 && dot >= 0 && dot <= len * len) return [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
-    }
-  }
-  return [1, 0];
-}
-
-function inside(x: number, z: number, poly: XZ[]) {
-  let hit = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const [xi, zi] = poly[i];
-    const [xj, zj] = poly[j];
-    if (zi > z !== zj > z && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) hit = !hit;
-  }
-  return hit;
-}
-
-const polyArea = (poly: XZ[]) => Math.abs(poly.reduce((s, a, i) => { const b = poly[(i + 1) % poly.length]; return s + a[0] * b[1] - b[0] * a[1]; }, 0) / 2);
-
-/**
- * Which way a door swings, matching the apps: into the larger room on its wall,
- * hinged at the end with the smaller x (or z).
- */
-function openingFloor(spec: PlanSpec, o: PlanSpec["openings"][number]) {
-  let [dx, dz] = wallDir(spec, o.at);
-  if (dx < -1e-6 || (Math.abs(dx) < 1e-6 && dz < 0)) [dx, dz] = [-dx, -dz];
-  const n: XZ = [-dz, dx];
-  const zoneOn = (sg: number) => spec.zones.find((z) => inside(o.at[0] + n[0] * sg * 0.05, o.at[1] + n[1] * sg * 0.05, z.polygon));
-  const plus = zoneOn(1), minus = zoneOn(-1);
-  const sign = (plus ? polyArea(plus.polygon) : -1) >= (minus ? polyArea(minus.polygon) : -1) ? 1 : -1;
-  return { dir: [dx, dz] as XZ, n, sign };
-}
 
 interface Box {
   minX: number;
@@ -207,16 +165,11 @@ export default function PlanPreview({
           </rect>
         ))}
       {spec.openings.map((o, i) => {
-        const f = openingFloor(spec, o);
-        const hw = o.width / 2;
-        const T = 0.06; // half wall thickness, as in the apps
-        if (o.type === "door") {
-          const op: XZ = [f.n[0] * f.sign, f.n[1] * f.sign];
-          const h: XZ = [o.at[0] - f.dir[0] * hw + op[0] * T, o.at[1] - f.dir[1] * hw + op[1] * T];
-          const r = o.width;
+        if (baseType(o.type) === "door") {
+          const { hinge: h, leaf, open: op, radius: r } = doorGeometry(spec, o);
           const end: XZ = [h[0] + op[0] * r, h[1] + op[1] * r];
-          const closed: XZ = [h[0] + f.dir[0] * r, h[1] + f.dir[1] * r];
-          const sweep = f.dir[0] * op[1] - f.dir[1] * op[0] > 0 ? 0 : 1;
+          const closed: XZ = [h[0] + leaf[0] * r, h[1] + leaf[1] * r];
+          const sweep = leaf[0] * op[1] - leaf[1] * op[0] > 0 ? 0 : 1;
           return (
             <g key={`sw${i}`} style={{ pointerEvents: "none" }}>
               <path d={`M ${h[0]} ${h[1]} L ${end[0]} ${end[1]} A ${r} ${r} 0 0 ${sweep} ${closed[0]} ${closed[1]} Z`} fill="#b07a4a" fillOpacity={0.08} stroke="none" />
@@ -231,8 +184,8 @@ export default function PlanPreview({
         const [dx, dz] = wallDir(spec, o.at);
         const hw = o.width / 2;
         return (
-          <line key={i} x1={o.at[0] - dx * hw} y1={o.at[1] - dz * hw} x2={o.at[0] + dx * hw} y2={o.at[1] + dz * hw} stroke={OPENING_COLOR[o.type] ?? "#999"} strokeWidth={0.14} strokeLinecap="butt">
-            <title>{o.type}</title>
+          <line key={i} x1={o.at[0] - dx * hw} y1={o.at[1] - dz * hw} x2={o.at[0] + dx * hw} y2={o.at[1] + dz * hw} stroke={OPENING_COLOR[baseType(o.type)] ?? "#999"} strokeWidth={0.14} strokeLinecap="butt">
+            <title>{o.type.replaceAll(":", " · ")}</title>
           </line>
         );
       })}
@@ -278,7 +231,7 @@ export default function PlanPreview({
               onSelectOpening?.(i);
             }}
           >
-            <title>{`${o.type} · ${o.width} m (click to edit)`}</title>
+            <title>{`${o.type.replaceAll(":", " · ")} · ${o.width} m (click to edit)`}</title>
             {i === selectedOpening && <line {...openingLine(o)} stroke="#1f1d1a" strokeWidth={0.26} strokeOpacity={0.35} strokeLinecap="round" />}
             <line {...openingLine(o)} stroke="transparent" strokeWidth={0.4} />
           </g>

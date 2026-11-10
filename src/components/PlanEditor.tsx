@@ -5,7 +5,7 @@ import PlanPreview, { type PreviewItem } from "./PlanPreview";
 import { FormMessage, SubmitButton } from "./forms";
 import { buttonClass } from "./ui";
 import { publishPlan } from "@/lib/actions/plans";
-import { removeOpening, updateOpening, type OpeningType } from "@/lib/planEdit";
+import { baseType, doorGeometry, removeOpening, setDoorSwing, updateOpening, type OpeningType } from "@/lib/planEdit";
 import type { PlanKind, PlanSpec } from "@/lib/types";
 
 /** Edit a plan as JSON with a live 2D preview, then publish it as a new version. */
@@ -112,14 +112,35 @@ export default function PlanEditor({ kind, roomType, spec, roomTypes, sizes, isN
             <div className="mt-2 flex flex-wrap items-end gap-3 rounded-lg border border-line bg-cream/50 p-3">
               <label className="block">
                 <span className="label">Type</span>
-                <select className="input py-1" value={sel.type} onChange={(e) => edit(updateOpening(parsed.spec!, selected, { type: e.target.value }))}>
+                <select className="input py-1" value={baseType(sel.type)} onChange={(e) => edit(updateOpening(parsed.spec!, selected, { type: e.target.value }))}>
                   <option value="door">Door</option>
                   <option value="window">Window</option>
                   <option value="slider">Slider</option>
                 </select>
               </label>
               <NumberField label="Width (m)" value={sel.width} min={0.3} onChange={(v) => edit(updateOpening(parsed.spec!, selected, { width: v }))} />
-              {sel.type === "window" && (
+              {baseType(sel.type) === "door" && (() => {
+                const { swing } = doorGeometry(parsed.spec!, sel);
+                return (
+                  <>
+                    <label className="block">
+                      <span className="label">Opens</span>
+                      <select className="input py-1" value={swing.dir} onChange={(e) => edit(setDoorSwing(parsed.spec!, selected, { ...swing, dir: e.target.value as "in" | "out" }))}>
+                        <option value="in">In (into the larger room)</option>
+                        <option value="out">Out</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="label" title="Seen from inside the larger room, facing the door">Hinge (seen from inside)</span>
+                      <select className="input py-1" value={swing.hinge} onChange={(e) => edit(setDoorSwing(parsed.spec!, selected, { ...swing, hinge: e.target.value as "left" | "right" }))}>
+                        <option value="left">Left</option>
+                        <option value="right">Right</option>
+                      </select>
+                    </label>
+                  </>
+                );
+              })()}
+              {baseType(sel.type) === "window" && (
                 <>
                   <NumberField label="Sill (m)" value={sel.sill ?? 0.9} min={0} onChange={(v) => edit(updateOpening(parsed.spec!, selected, { sill: v }))} />
                   <NumberField label="Height (m)" value={sel.height ?? 1.2} min={0.2} onChange={(v) => edit(updateOpening(parsed.spec!, selected, { height: v }))} />
@@ -133,7 +154,7 @@ export default function PlanEditor({ kind, roomType, spec, roomTypes, sizes, isN
                   setSelected(null);
                 }}
               >
-                Remove {sel.type}
+                Remove {baseType(sel.type)}
               </button>
             </div>
           )}
