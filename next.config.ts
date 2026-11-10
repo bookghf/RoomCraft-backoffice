@@ -3,6 +3,8 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   // Every page is signed-in and per user, so there is nothing to prerender or cache.
   poweredByHeader: false,
+  // Self-contained server in .next/standalone for the Docker image (see Dockerfile).
+  output: "standalone",
   turbopack: {
     rules: {
       "*.css": {
