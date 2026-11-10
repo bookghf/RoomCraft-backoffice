@@ -73,8 +73,8 @@ export default function PlanEditor({ kind, roomType, spec, roomTypes, sizes, isN
           {parsed.error && <span className="mt-1 block text-xs text-rose-700">{parsed.error}</span>}
         </label>
         <div>
-          <span className="label">Preview</span>
-          <div className="overflow-hidden rounded-lg border border-line bg-white">{parsed.spec ? <PlanPreview spec={parsed.spec} items={items} /> : <div className="p-10 text-center text-sm text-muted">Fix the JSON to see the plan.</div>}</div>
+          <span className="label">Preview · drag a wall to resize the room</span>
+          <div className="overflow-hidden rounded-lg border border-line bg-white">{parsed.spec ? <PlanPreview spec={parsed.spec} items={items} onChange={(next) => setText(JSON.stringify(next, null, 2))} /> : <div className="p-10 text-center text-sm text-muted">Fix the JSON to see the plan.</div>}</div>
         </div>
       </div>
       <div className="flex items-center gap-3 border-t border-line pt-4">

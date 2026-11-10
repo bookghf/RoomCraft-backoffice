@@ -1,3 +1,7 @@
+"use client";
+
+import { useRef, useState } from "react";
+import { edgeOf, moveWall, zoneSize } from "@/lib/planEdit";
 import type { PlanSpec, XZ } from "@/lib/types";
 
 export interface PreviewItem {
@@ -31,23 +35,76 @@ function wallDir(spec: PlanSpec, at: XZ): XZ {
   return [1, 0];
 }
 
+interface Box {
+  minX: number;
+  minZ: number;
+  maxX: number;
+  maxZ: number;
+}
+
+interface Drag {
+  zone: number;
+  edge: number;
+  start: XZ;
+  spec: PlanSpec;
+  box: Box;
+}
+
 /**
  * Top-down drawing of a plan, in metres: X to the right, Z down, like the editor's 2D view.
  * Items rotate by -rot because the apps rotate about +Y.
+ * With `onChange`, every wall gets a handle that drags it in or out to resize the room.
  */
-export default function PlanPreview({ spec, items = [], className = "" }: { spec: PlanSpec; items?: PreviewItem[]; className?: string }) {
+export default function PlanPreview({ spec, items = [], className = "", onChange }: { spec: PlanSpec; items?: PreviewItem[]; className?: string; onChange?: (spec: PlanSpec) => void }) {
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [drag, setDrag] = useState<Drag | null>(null);
   const pts = spec.zones.flatMap((z) => z.polygon);
   if (!pts.length) return <div className="p-6 text-center text-sm text-muted">No zones to draw.</div>;
   const xs = pts.map((p) => p[0]);
   const zs = pts.map((p) => p[1]);
-  const pad = 0.6;
-  const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad;
-  const minZ = Math.min(...zs) - pad, maxZ = Math.max(...zs) + pad;
+  // Extra room around an editable plan so walls can be dragged outwards; the view holds still while dragging.
+  const pad = onChange ? 1.5 : 0.6;
+  const box: Box = drag?.box ?? { minX: Math.min(...xs) - pad, maxX: Math.max(...xs) + pad, minZ: Math.min(...zs) - pad, maxZ: Math.max(...zs) + pad };
+  const { minX, maxX, minZ, maxZ } = box;
   const w = maxX - minX, h = maxZ - minZ;
   const font = Math.max(w, h) / 45;
 
+  const toPlan = (e: React.PointerEvent): XZ | null => {
+    const m = svgRef.current?.getScreenCTM();
+    if (!m) return null;
+    const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse());
+    return [p.x, p.y];
+  };
+  const onDown = (zone: number, edge: number) => (e: React.PointerEvent) => {
+    const start = toPlan(e);
+    if (!start) return;
+    e.preventDefault();
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    setDrag({ zone, edge, start, spec, box });
+  };
+  const onMove = (e: React.PointerEvent) => {
+    if (!drag || !onChange) return;
+    const p = toPlan(e);
+    const ed = edgeOf(drag.spec, drag.zone, drag.edge);
+    if (!p || !ed) return;
+    const dist = (p[0] - drag.start[0]) * ed.n[0] + (p[1] - drag.start[1]) * ed.n[1];
+    const next = moveWall(drag.spec, drag.zone, drag.edge, dist);
+    if (next) onChange(next);
+  };
+  const onUp = () => setDrag(null);
+  const dragged = drag ? spec.zones[drag.zone] : undefined;
+
   return (
-    <svg viewBox={`${minX} ${minZ} ${w} ${h}`} className={`h-auto w-full ${className}`} role="img" aria-label={`Floor plan of ${spec.name.en}`}>
+    <svg
+      ref={svgRef}
+      viewBox={`${minX} ${minZ} ${w} ${h}`}
+      className={`h-auto w-full touch-none select-none ${className}`}
+      role="img"
+      aria-label={`Floor plan of ${spec.name.en}`}
+      onPointerMove={onMove}
+      onPointerUp={onUp}
+      onPointerCancel={onUp}
+    >
       <rect x={minX} y={minZ} width={w} height={h} fill="#fff" />
       {spec.zones.map((z) => (
         <polygon key={z.id} points={z.polygon.map((p) => p.join(",")).join(" ")} fill={ZONE_FILL[z.kind] ?? "#f4efe6"} stroke="#3b3a36" strokeWidth={0.1} strokeLinejoin="round" />
@@ -100,6 +157,37 @@ export default function PlanPreview({ spec, items = [], className = "" }: { spec
           </text>
         );
       })}
+      {onChange &&
+        spec.zones.map((z, zi) =>
+          z.polygon.map((_, ei) => {
+            const ed = edgeOf(spec, zi, ei);
+            if (!ed) return null;
+            const active = drag?.zone === zi && drag.edge === ei;
+            const cursor = Math.abs(ed.n[0]) > 0.9 ? "ew-resize" : Math.abs(ed.n[1]) > 0.9 ? "ns-resize" : "move";
+            const mx = (ed.a[0] + ed.b[0]) / 2, mz = (ed.a[1] + ed.b[1]) / 2;
+            const along: XZ = [ed.n[1], -ed.n[0]];
+            const g = 0.18;
+            return (
+              <g key={`h-${zi}-${ei}`} className="group" style={{ cursor }} onPointerDown={onDown(zi, ei)}>
+                <title>Drag to move this wall</title>
+                <line x1={ed.a[0]} y1={ed.a[1]} x2={ed.b[0]} y2={ed.b[1]} stroke="transparent" strokeWidth={0.35} />
+                <line x1={ed.a[0]} y1={ed.a[1]} x2={ed.b[0]} y2={ed.b[1]} stroke="#2f5d50" strokeWidth={0.1} strokeOpacity={active ? 0.9 : 0} className="group-hover:[stroke-opacity:0.5]" />
+                <line x1={mx - along[0] * g} y1={mz - along[1] * g} x2={mx + along[0] * g} y2={mz + along[1] * g} stroke={active ? "#2f5d50" : "#fff"} strokeWidth={0.13} strokeLinecap="round" />
+                <line x1={mx - along[0] * g} y1={mz - along[1] * g} x2={mx + along[0] * g} y2={mz + along[1] * g} stroke="#2f5d50" strokeWidth={0.06} strokeLinecap="round" />
+              </g>
+            );
+          }),
+        )}
+      {dragged && (() => {
+        const sz = zoneSize(dragged.polygon);
+        const cx = dragged.polygon.reduce((s, p) => s + p[0], 0) / dragged.polygon.length;
+        const cz = dragged.polygon.reduce((s, p) => s + p[1], 0) / dragged.polygon.length;
+        return (
+          <text x={cx} y={cz + font * 1.4} fontSize={font} textAnchor="middle" fill="#2f5d50" fontWeight={600} style={{ pointerEvents: "none" }}>
+            {sz.w.toFixed(2)} × {sz.d.toFixed(2)} m
+          </text>
+        );
+      })()}
       <g transform={`translate(${minX + 0.2} ${maxZ - 0.25})`}>
         <line x1={0} x2={1} y1={0} y2={0} stroke="#1f1d1a" strokeWidth={0.03} />
         <text x={0.5} y={-0.08} fontSize={font * 0.9} textAnchor="middle" fill="#1f1d1a">1 m</text>
