@@ -5,6 +5,9 @@ import { Plus, Trash2 } from "lucide-react";
 import { FormMessage, SubmitButton } from "./forms";
 import { buttonClass } from "./ui";
 import ModelUpload from "./ModelUpload";
+import dynamic from "next/dynamic";
+import ThumbnailUpload from "./ThumbnailUpload";
+import { parseColorMaterials, withColorMaterials } from "@/lib/colorMaterials";
 import { saveItem } from "@/lib/actions/catalog";
 import type { AdminItem, CatalogColor, Category } from "@/lib/types";
 
@@ -38,6 +41,9 @@ function Field({ label, children, hint, className = "" }: { label: string; child
   );
 }
 
+// three.js only loads on items that have a model.
+const ModelPreview = dynamic(() => import("./ModelPreview"), { ssr: false });
+
 /** Create or edit a catalog item. Builds the API payload in the browser and sends it as one JSON field. */
 export default function ItemForm({ item, categories, templates, readOnly }: { item?: AdminItem; categories: Category[]; templates: string[]; readOnly?: boolean }) {
   const [state, action] = useActionState(saveItem, {});
@@ -48,7 +54,9 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
     mountHeight: start.mountHeight === undefined ? "" : String(start.mountHeight),
     paramsText: JSON.stringify(start.model.params ?? {}, null, 2),
   });
-  const [uploading, setUploading] = useState(false);
+  // Count of uploads in progress; saving waits until they finish.
+  const [uploads, setUploads] = useState(0);
+  const trackUpload = (busy: boolean) => setUploads((n) => Math.max(0, n + (busy ? 1 : -1)));
   const set = <K extends keyof typeof v>(k: K, value: (typeof v)[K]) => setV((s) => ({ ...s, [k]: value }));
   const setColor = (i: number, c: Partial<CatalogColor>) => set("colors", v.colors.map((x, j) => (j === i ? { ...x, ...c, name: { ...x.name, ...c.name } } : x)));
 
@@ -60,6 +68,20 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
       return "Not valid JSON";
     }
   }, [v.paramsText]);
+
+  // Parts of the .glb that follow the customer's colour, kept in the template parameters.
+  const params = useMemo<Record<string, unknown>>(() => {
+    try {
+      const p = JSON.parse(v.paramsText || "{}");
+      return p && typeof p === "object" && !Array.isArray(p) ? p : {};
+    } catch {
+      return {};
+    }
+  }, [v.paramsText]);
+  const colorMaterials = useMemo(() => parseColorMaterials(params), [params]);
+  const setColorMaterials = (names: string[]) => set("paramsText", JSON.stringify(withColorMaterials(params, names), null, 2));
+  const [materials, setMaterials] = useState<string[] | null>(null);
+  const [previewColor, setPreviewColor] = useState(0);
 
   const payload = useMemo(() => {
     if (paramsError) return "";
@@ -119,20 +141,18 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
           ))}
         </section>
 
-        <section className="grid gap-4 sm:grid-cols-3">
+        <section className="grid gap-4 sm:grid-cols-2">
           <Field label="Price (THB)">
             <input className="input tabular-nums" type="number" min={0} step="0.01" value={v.priceTHB} onChange={(e) => set("priceTHB", e.target.value)} required />
           </Field>
           <Field label="SKU" hint="Optional product code">
             <input className="input font-mono" value={v.sku ?? ""} onChange={(e) => set("sku", e.target.value)} />
           </Field>
-          <Field label="Thumbnail URL">
-            <input className="input" type="url" value={v.thumbnailUrl ?? ""} onChange={(e) => set("thumbnailUrl", e.target.value)} placeholder="https://" />
-          </Field>
         </section>
 
         <section>
           <h3 className="mb-2 text-sm font-semibold">Size and placement</h3>
+          <p className="-mt-1 mb-2 text-xs text-muted">Filled in from the 3D model when you upload one. The apps use it for placement and collisions, and fit the model inside it.</p>
           <div className="grid gap-4 sm:grid-cols-4">
             {(["w", "d", "h"] as const).map((k) => (
               <Field key={k} label={{ w: "Width (m)", d: "Depth (m)", h: "Height (m)" }[k]}>
@@ -185,10 +205,83 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
           <p className="mt-1 text-xs text-muted">The first colour is the default.</p>
         </section>
 
-        <section>
-          <h3 className="mb-2 text-sm font-semibold">3D model</h3>
-          <ModelUpload value={v.modelUrl} itemId={v.id} onChange={(url) => set("modelUrl", url)} onBusyChange={setUploading} disabled={readOnly} />
+        <section className="grid gap-4 lg:grid-cols-2">
+          <div>
+            <h3 className="mb-2 text-sm font-semibold">Thumbnail</h3>
+            <ThumbnailUpload value={v.thumbnailUrl} itemId={v.id} onChange={(url) => set("thumbnailUrl", url)} onBusyChange={trackUpload} disabled={readOnly} />
+          </div>
+          <div>
+            <h3 className="mb-2 text-sm font-semibold">3D model</h3>
+            <ModelUpload value={v.modelUrl} itemId={v.id} onChange={(url, size) => {
+                setMaterials(null);
+                setV((s) => ({ ...s, modelUrl: url, ...(size ? { size: { w: size.w, d: size.d, h: size.h } } : {}) }));
+              }} onBusyChange={trackUpload} disabled={readOnly} />
+          </div>
         </section>
+
+        {v.modelUrl && (
+          <section className="grid gap-4 lg:grid-cols-[3fr_2fr]">
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">Preview</h3>
+              <ModelPreview
+                url={v.modelUrl}
+                size={v.size}
+                color={v.colors[previewColor]?.hex ?? v.colors[0]?.hex ?? "#cccccc"}
+                colorMaterials={colorMaterials}
+                onMaterials={(names) => {
+                  setMaterials(names);
+                  // Forget parts that aren't in this model (e.g. after replacing the file).
+                  const kept = colorMaterials.filter((n) => names.includes(n));
+                  if (kept.length !== colorMaterials.length) setColorMaterials(kept);
+                }}
+              />
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
+                Preview colour:
+                {v.colors.map((c, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    title={c.name.en || c.id}
+                    aria-label={`Preview ${c.name.en || c.id}`}
+                    onClick={() => setPreviewColor(i)}
+                    className={`size-6 rounded-full border-2 ${i === previewColor ? "border-brand" : "border-line"}`}
+                    style={{ background: c.hex }}
+                  />
+                ))}
+              </div>
+            </div>
+            <div>
+              <h3 className="mb-1 text-sm font-semibold">Parts that change colour</h3>
+              <p className="mb-2 text-xs text-muted">Tick the materials that follow the colour the customer picks, e.g. fabric or paint. Unticked parts keep the look from the file.</p>
+              {materials === null ? (
+                <p className="text-xs text-muted">Reading the model…</p>
+              ) : materials.length === 0 ? (
+                <p className="text-xs text-muted">This model has no named materials, so its colour can&apos;t change. Re-export it with named materials, or upload it as .fbx, .obj or .dae so they get names.</p>
+              ) : (
+                <div className="max-h-72 space-y-1 overflow-y-auto rounded-lg border border-line p-2">
+                  {materials.map((name) => (
+                    <label key={name} className="flex items-center gap-2 rounded px-1 py-0.5 text-sm hover:bg-zinc-50">
+                      <input
+                        type="checkbox"
+                        className="accent-brand"
+                        checked={colorMaterials.includes(name)}
+                        disabled={readOnly || !!paramsError}
+                        onChange={(e) => setColorMaterials(e.target.checked ? [...colorMaterials, name] : colorMaterials.filter((n) => n !== name))}
+                      />
+                      <span className="truncate font-mono text-xs">{name}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {materials && materials.length > 0 && (
+                <div className="mt-2 flex gap-2">
+                  <button type="button" className={buttonClass("ghost", "sm")} disabled={readOnly || !!paramsError} onClick={() => setColorMaterials(materials)}>Tick all</button>
+                  <button type="button" className={buttonClass("ghost", "sm")} disabled={readOnly || !!paramsError} onClick={() => setColorMaterials([])}>Clear</button>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
         <section className="grid gap-4 sm:grid-cols-3">
           <Field label="3D template" hint="How the apps draw it until a .glb model is set">
@@ -206,7 +299,7 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
       </fieldset>
       {!readOnly && (
         <div className="flex items-center gap-3 border-t border-line pt-4">
-          <SubmitButton disabled={!!paramsError || uploading}>{item ? "Save changes" : "Create item"}</SubmitButton>
+          <SubmitButton disabled={!!paramsError || uploads > 0}>{item ? "Save changes" : "Create item"}</SubmitButton>
           <span className="text-xs text-muted">Saving doesn&apos;t change the apps until the catalog is published.</span>
         </div>
       )}

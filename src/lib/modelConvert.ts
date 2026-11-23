@@ -156,7 +156,38 @@ function dropBrokenTextures(root: Object3D) {
   return dropped;
 }
 
+export interface ModelSize {
+  /** Width (x), depth (z) and height (y) in metres, rounded to the centimetre. */
+  w: number;
+  d: number;
+  h: number;
+  /** Set when the file's units weren't metres and we guessed them from the size. */
+  guessedUnit?: "cm" | "mm";
+}
+
+/** A plausible furniture size range in metres, used to guess files saved in cm or mm. */
+const PLAUSIBLE_MAX_M = 10;
+
+/** Measures the model's bounding box. glTF is in metres; other formats may be in cm or mm, so very large models are scaled down. */
+async function measure(root: Object3D): Promise<ModelSize | undefined> {
+  const { Box3, Vector3 } = await import("three");
+  root.updateMatrixWorld(true);
+  const dim = new Box3().setFromObject(root).getSize(new Vector3());
+  if (![dim.x, dim.y, dim.z].every((n) => Number.isFinite(n) && n >= 0)) return undefined;
+  let factor = 1;
+  let guessedUnit: ModelSize["guessedUnit"];
+  const max = Math.max(dim.x, dim.y, dim.z);
+  if (max > PLAUSIBLE_MAX_M) {
+    if (max / 100 <= PLAUSIBLE_MAX_M) [factor, guessedUnit] = [1 / 100, "cm"];
+    else [factor, guessedUnit] = [1 / 1000, "mm"];
+  }
+  const m = (n: number) => Math.max(0.01, Math.round(n * factor * 100) / 100);
+  return { w: m(dim.x), d: m(dim.z), h: m(dim.y), guessedUnit };
+}
+
 export interface ConvertedModel {
+  /** Real-world size read from the model, to prefill the item size. */
+  size?: ModelSize;
   file: File;
   /** True when the picked file was already a .glb and is uploaded unchanged. */
   passthrough: boolean;
@@ -176,7 +207,7 @@ export async function toGlb(input: File): Promise<ConvertedModel> {
   const ext = extensionOf(name);
   if (ext === "glb") {
     if (!isGlb(data)) throw new ModelFileError("This file isn't a valid .glb.");
-    return { file: input, passthrough: true, warnings: [] };
+    return { file: input, passthrough: true, warnings: [], size: await measureGlb(data) };
   }
   if (ext === "zip" || ext === "kmz") {
     const { unzipSync } = await import("three/examples/jsm/libs/fflate.module.js");
@@ -189,7 +220,8 @@ export async function toGlb(input: File): Promise<ConvertedModel> {
     const inner = files[name];
     data = inner.buffer.slice(inner.byteOffset, inner.byteOffset + inner.byteLength) as ArrayBuffer;
     if (extensionOf(name) === "glb" && Object.keys(files).length === 1) {
-      return { file: new File([data], `${baseName}.glb`, { type: "model/gltf-binary" }), passthrough: false, warnings: [] };
+      if (!isGlb(data)) throw new ModelFileError("The .glb in the archive isn't valid.");
+      return { file: new File([data], `${baseName}.glb`, { type: "model/gltf-binary" }), passthrough: false, warnings: [], size: await measureGlb(data) };
     }
   }
 
@@ -214,11 +246,38 @@ export async function toGlb(input: File): Promise<ConvertedModel> {
     });
     if (!meshes) throw new ModelFileError("The file has no 3D geometry in it.");
 
+    nameMaterials(root);
+    const size = await measure(root);
     const { GLTFExporter } = await import("three/examples/jsm/exporters/GLTFExporter.js");
     const out = await new GLTFExporter().parseAsync(root, { binary: true, onlyVisible: true, maxTextureSize: 2048 });
     if (!(out instanceof ArrayBuffer)) throw new ModelFileError("The model couldn't be converted to .glb.");
-    return { file: new File([out], `${baseName}.glb`, { type: "model/gltf-binary" }), passthrough: false, warnings };
+    return { file: new File([out], `${baseName}.glb`, { type: "model/gltf-binary" }), passthrough: false, warnings, size };
   } finally {
     dispose();
   }
+}
+
+/** Reads a .glb just far enough to measure it. Returns undefined if it can't be parsed; the upload still goes ahead. */
+async function measureGlb(data: ArrayBuffer): Promise<ModelSize | undefined> {
+  try {
+    const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
+    const gltf = await new GLTFLoader().parseAsync(data, "");
+    return await measure(gltf.scene);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Gives unnamed materials a name ("Material 1", …) so staff can pick which parts follow the item colour. */
+function nameMaterials(root: Object3D) {
+  const seen = new Set<Material>();
+  let n = 0;
+  root.traverse((o) => {
+    const mats = (o as { material?: Material | Material[] }).material;
+    for (const m of Array.isArray(mats) ? mats : mats ? [mats] : []) {
+      if (seen.has(m)) continue;
+      seen.add(m);
+      if (!m.name.trim()) m.name = `Material ${++n}`;
+    }
+  });
 }
