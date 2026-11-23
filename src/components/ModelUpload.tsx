@@ -3,27 +3,10 @@
 import { useRef, useState } from "react";
 import { Box, Loader2, Upload, X } from "lucide-react";
 import { buttonClass } from "./ui";
-import { MODEL_ACCEPT, ModelFileError, checkModelFile, toGlb } from "@/lib/modelConvert";
+import { fileNameOf, slug, uploadToBlob } from "@/lib/blobUpload";
+import { MODEL_ACCEPT, ModelFileError, checkModelFile, toGlb, type ModelSize } from "@/lib/modelConvert";
 
 type Status = { kind: "idle" } | { kind: "converting"; name: string } | { kind: "uploading"; name: string; percent: number } | { kind: "error"; message: string };
-
-function fileNameOf(url: string) {
-  try {
-    return decodeURIComponent(new URL(url).pathname.split("/").pop() ?? url);
-  } catch {
-    return url;
-  }
-}
-
-function slug(s: string) {
-  return (
-    s
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 60) || "model"
-  );
-}
 
 /**
  * Upload a 3D model for a catalog item. Any supported file is converted to .glb in the browser,
@@ -32,7 +15,8 @@ function slug(s: string) {
 export default function ModelUpload({ value, itemId, onChange, onBusyChange, disabled }: {
   value?: string;
   itemId: string;
-  onChange: (url: string | undefined) => void;
+  /** `size` is the model's measured size, when it could be read. */
+  onChange: (url: string | undefined, size?: ModelSize) => void;
   onBusyChange?: (busy: boolean) => void;
   disabled?: boolean;
 }) {
@@ -52,19 +36,19 @@ export default function ModelUpload({ value, itemId, onChange, onBusyChange, dis
       const converted = await toGlb(file);
       setWarnings(converted.warnings);
       setStatus({ kind: "uploading", name: converted.file.name, percent: 0 });
-      const { upload } = await import("@vercel/blob/client");
-      const base = slug(itemId.trim() ? `${itemId}-${converted.file.name.replace(/\.glb$/i, "")}` : converted.file.name.replace(/\.glb$/i, ""));
-      const blob = await upload(`models/${base}.glb`, converted.file, {
-        access: "public",
-        handleUploadUrl: "/api/models/upload",
-        contentType: "model/gltf-binary",
-        multipart: converted.file.size > 8 * 1024 * 1024,
-        onUploadProgress: ({ percentage }) => setStatus({ kind: "uploading", name: converted.file.name, percent: Math.round(percentage) }),
-      });
-      onChange(blob.url);
+      const name = converted.file.name.replace(/\.glb$/i, "");
+      const url = await uploadToBlob(`models/${slug(itemId.trim() ? `${itemId}-${name}` : name)}.glb`, converted.file, (percent) =>
+        setStatus({ kind: "uploading", name: converted.file.name, percent }),
+      );
+      onChange(url, converted.size);
+      if (converted.size) {
+        const { w, d, h, guessedUnit } = converted.size;
+        const unit = guessedUnit ? ` The file looked like it was in ${guessedUnit === "cm" ? "centimetres" : "millimetres"}, so it was converted to metres.` : "";
+        setWarnings((ws) => [...ws, `Size set from the model: ${w} × ${d} × ${h} m (W × D × H).${unit} Check it below.`]);
+      }
       setStatus({ kind: "idle" });
     } catch (e) {
-      const message = e instanceof ModelFileError ? e.message : `Upload failed: ${e instanceof Error ? e.message : String(e)}`;
+      const message = e instanceof ModelFileError ? e.message : `Upload failed. ${e instanceof Error ? e.message : String(e)}`;
       setStatus({ kind: "error", message });
     } finally {
       onBusyChange?.(false);
