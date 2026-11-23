@@ -4,6 +4,7 @@ import { useActionState, useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { FormMessage, SubmitButton } from "./forms";
 import { buttonClass } from "./ui";
+import ModelUpload from "./ModelUpload";
 import { saveItem } from "@/lib/actions/catalog";
 import type { AdminItem, CatalogColor, Category } from "@/lib/types";
 
@@ -47,6 +48,7 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
     mountHeight: start.mountHeight === undefined ? "" : String(start.mountHeight),
     paramsText: JSON.stringify(start.model.params ?? {}, null, 2),
   });
+  const [uploading, setUploading] = useState(false);
   const set = <K extends keyof typeof v>(k: K, value: (typeof v)[K]) => setV((s) => ({ ...s, [k]: value }));
   const setColor = (i: number, c: Partial<CatalogColor>) => set("colors", v.colors.map((x, j) => (j === i ? { ...x, ...c, name: { ...x.name, ...c.name } } : x)));
 
@@ -117,7 +119,7 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
           ))}
         </section>
 
-        <section className="grid gap-4 sm:grid-cols-4">
+        <section className="grid gap-4 sm:grid-cols-3">
           <Field label="Price (THB)">
             <input className="input tabular-nums" type="number" min={0} step="0.01" value={v.priceTHB} onChange={(e) => set("priceTHB", e.target.value)} required />
           </Field>
@@ -126,9 +128,6 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
           </Field>
           <Field label="Thumbnail URL">
             <input className="input" type="url" value={v.thumbnailUrl ?? ""} onChange={(e) => set("thumbnailUrl", e.target.value)} placeholder="https://" />
-          </Field>
-          <Field label="3D model URL (.glb)">
-            <input className="input" type="url" value={v.modelUrl ?? ""} onChange={(e) => set("modelUrl", e.target.value)} placeholder="https://" />
           </Field>
         </section>
 
@@ -186,6 +185,11 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
           <p className="mt-1 text-xs text-muted">The first colour is the default.</p>
         </section>
 
+        <section>
+          <h3 className="mb-2 text-sm font-semibold">3D model</h3>
+          <ModelUpload value={v.modelUrl} itemId={v.id} onChange={(url) => set("modelUrl", url)} onBusyChange={setUploading} disabled={readOnly} />
+        </section>
+
         <section className="grid gap-4 sm:grid-cols-3">
           <Field label="3D template" hint="How the apps draw it until a .glb model is set">
             <input className="input font-mono" list="templates" value={v.model.template} onChange={(e) => set("model", { ...v.model, template: e.target.value })} required />
@@ -202,7 +206,7 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
       </fieldset>
       {!readOnly && (
         <div className="flex items-center gap-3 border-t border-line pt-4">
-          <SubmitButton disabled={!!paramsError}>{item ? "Save changes" : "Create item"}</SubmitButton>
+          <SubmitButton disabled={!!paramsError || uploading}>{item ? "Save changes" : "Create item"}</SubmitButton>
           <span className="text-xs text-muted">Saving doesn&apos;t change the apps until the catalog is published.</span>
         </div>
       )}
