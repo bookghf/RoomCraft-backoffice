@@ -246,7 +246,6 @@ export async function toGlb(input: File): Promise<ConvertedModel> {
     });
     if (!meshes) throw new ModelFileError("The file has no 3D geometry in it.");
 
-    nameMaterials(root);
     const size = await measure(root);
     const { GLTFExporter } = await import("three/examples/jsm/exporters/GLTFExporter.js");
     const out = await new GLTFExporter().parseAsync(root, { binary: true, onlyVisible: true, maxTextureSize: 2048 });
@@ -266,18 +265,4 @@ async function measureGlb(data: ArrayBuffer): Promise<ModelSize | undefined> {
   } catch {
     return undefined;
   }
-}
-
-/** Gives unnamed materials a name ("Material 1", …) so staff can pick which parts follow the item colour. */
-function nameMaterials(root: Object3D) {
-  const seen = new Set<Material>();
-  let n = 0;
-  root.traverse((o) => {
-    const mats = (o as { material?: Material | Material[] }).material;
-    for (const m of Array.isArray(mats) ? mats : mats ? [mats] : []) {
-      if (seen.has(m)) continue;
-      seen.add(m);
-      if (!m.name.trim()) m.name = `Material ${++n}`;
-    }
-  });
 }

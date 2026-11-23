@@ -7,7 +7,6 @@ import { buttonClass } from "./ui";
 import ModelUpload from "./ModelUpload";
 import dynamic from "next/dynamic";
 import ThumbnailUpload from "./ThumbnailUpload";
-import { parseColorMaterials, withColorMaterials } from "@/lib/colorMaterials";
 import { saveItem } from "@/lib/actions/catalog";
 import type { AdminItem, CatalogColor, Category } from "@/lib/types";
 
@@ -69,20 +68,6 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
     }
   }, [v.paramsText]);
 
-  // Parts of the .glb that follow the customer's colour, kept in the template parameters.
-  const params = useMemo<Record<string, unknown>>(() => {
-    try {
-      const p = JSON.parse(v.paramsText || "{}");
-      return p && typeof p === "object" && !Array.isArray(p) ? p : {};
-    } catch {
-      return {};
-    }
-  }, [v.paramsText]);
-  const colorMaterials = useMemo(() => parseColorMaterials(params), [params]);
-  const setColorMaterials = (names: string[]) => set("paramsText", JSON.stringify(withColorMaterials(params, names), null, 2));
-  const [materials, setMaterials] = useState<string[] | null>(null);
-  const [previewColor, setPreviewColor] = useState(0);
-
   const payload = useMemo(() => {
     if (paramsError) return "";
     const isFloor = v.mount === "floor";
@@ -101,7 +86,7 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
       light: !!v.light,
       hidden: !!v.hidden,
       mountHeight: v.mountHeight === "" ? undefined : Number(v.mountHeight),
-      model: { template: v.model.template.trim(), params: JSON.parse(v.paramsText || "{}") },
+      model: { template: v.model.template.trim(), params: modelParams(JSON.parse(v.paramsText || "{}"), !!v.modelUrl?.trim()) },
       modelUrl: v.modelUrl?.trim() || undefined,
       thumbnailUrl: v.thumbnailUrl?.trim() || undefined,
     });
@@ -181,6 +166,12 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
           </div>
         </section>
 
+        {v.modelUrl ? (
+          <section>
+            <h3 className="mb-1 text-sm font-semibold">Colours</h3>
+            <p className="text-xs text-muted">Items with a 3D model always show the model&apos;s own colours, so customers can&apos;t pick a colour. Remove the model to set colours.</p>
+          </section>
+        ) : (
         <section>
           <div className="mb-2 flex items-center justify-between">
             <h3 className="text-sm font-semibold">Colours</h3>
@@ -204,6 +195,7 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
           </div>
           <p className="mt-1 text-xs text-muted">The first colour is the default.</p>
         </section>
+        )}
 
         <section className="grid gap-4 lg:grid-cols-2">
           <div>
@@ -213,72 +205,16 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
           <div>
             <h3 className="mb-2 text-sm font-semibold">3D model</h3>
             <ModelUpload value={v.modelUrl} itemId={v.id} onChange={(url, size) => {
-                setMaterials(null);
                 setV((s) => ({ ...s, modelUrl: url, ...(size ? { size: { w: size.w, d: size.d, h: size.h } } : {}) }));
               }} onBusyChange={trackUpload} disabled={readOnly} />
           </div>
         </section>
 
         {v.modelUrl && (
-          <section className="grid gap-4 lg:grid-cols-[3fr_2fr]">
+          <section className="max-w-2xl">
             <div>
               <h3 className="mb-2 text-sm font-semibold">Preview</h3>
-              <ModelPreview
-                url={v.modelUrl}
-                size={v.size}
-                color={v.colors[previewColor]?.hex ?? v.colors[0]?.hex ?? "#cccccc"}
-                colorMaterials={colorMaterials}
-                onMaterials={(names) => {
-                  setMaterials(names);
-                  // Forget parts that aren't in this model (e.g. after replacing the file).
-                  const kept = colorMaterials.filter((n) => names.includes(n));
-                  if (kept.length !== colorMaterials.length) setColorMaterials(kept);
-                }}
-              />
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
-                Preview colour:
-                {v.colors.map((c, i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    title={c.name.en || c.id}
-                    aria-label={`Preview ${c.name.en || c.id}`}
-                    onClick={() => setPreviewColor(i)}
-                    className={`size-6 rounded-full border-2 ${i === previewColor ? "border-brand" : "border-line"}`}
-                    style={{ background: c.hex }}
-                  />
-                ))}
-              </div>
-            </div>
-            <div>
-              <h3 className="mb-1 text-sm font-semibold">Parts that change colour</h3>
-              <p className="mb-2 text-xs text-muted">Tick the materials that follow the colour the customer picks, e.g. fabric or paint. Unticked parts keep the look from the file.</p>
-              {materials === null ? (
-                <p className="text-xs text-muted">Reading the model…</p>
-              ) : materials.length === 0 ? (
-                <p className="text-xs text-muted">This model has no named materials, so its colour can&apos;t change. Re-export it with named materials, or upload it as .fbx, .obj or .dae so they get names.</p>
-              ) : (
-                <div className="max-h-72 space-y-1 overflow-y-auto rounded-lg border border-line p-2">
-                  {materials.map((name) => (
-                    <label key={name} className="flex items-center gap-2 rounded px-1 py-0.5 text-sm hover:bg-zinc-50">
-                      <input
-                        type="checkbox"
-                        className="accent-brand"
-                        checked={colorMaterials.includes(name)}
-                        disabled={readOnly || !!paramsError}
-                        onChange={(e) => setColorMaterials(e.target.checked ? [...colorMaterials, name] : colorMaterials.filter((n) => n !== name))}
-                      />
-                      <span className="truncate font-mono text-xs">{name}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
-              {materials && materials.length > 0 && (
-                <div className="mt-2 flex gap-2">
-                  <button type="button" className={buttonClass("ghost", "sm")} disabled={readOnly || !!paramsError} onClick={() => setColorMaterials(materials)}>Tick all</button>
-                  <button type="button" className={buttonClass("ghost", "sm")} disabled={readOnly || !!paramsError} onClick={() => setColorMaterials([])}>Clear</button>
-                </div>
-              )}
+              <ModelPreview url={v.modelUrl} size={v.size} />
             </div>
           </section>
         )}
@@ -305,4 +241,12 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
       )}
     </form>
   );
+}
+
+/** Template parameters to save. "colorMaterials" (part recolouring) is no longer used, so it is dropped from .glb items. */
+function modelParams(params: Record<string, unknown>, hasModel: boolean) {
+  if (!hasModel || !("colorMaterials" in params)) return params;
+  const rest = { ...params };
+  delete rest.colorMaterials;
+  return rest;
 }

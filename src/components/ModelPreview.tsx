@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
-import type { Color, Group, Material, Mesh, Object3D } from "three";
+import type { Group, Object3D } from "three";
 
 interface Size {
   w: number;
@@ -12,17 +12,10 @@ interface Size {
 
 /**
  * Interactive preview of an item's .glb, drawn the way the designer app draws it:
- * scaled uniformly to fit inside the item size (shown as an outline), with the chosen colour
- * applied to the materials listed in colorMaterials. Drag to orbit, scroll to zoom.
+ * scaled uniformly to fit inside the item size (shown as an outline), in the file's own colours.
+ * Drag to orbit, scroll to zoom.
  */
-export default function ModelPreview({ url, size, color, colorMaterials, onMaterials }: {
-  url: string;
-  size: Size;
-  color: string;
-  colorMaterials: string[];
-  /** Called with the model's material names once it has loaded. */
-  onMaterials?: (names: string[]) => void;
-}) {
+export default function ModelPreview({ url, size }: { url: string; size: Size }) {
   const host = useRef<HTMLDivElement>(null);
   // Which URL finished loading, and whether it worked. Anything else means loading.
   const [loaded, setLoaded] = useState<{ url: string; ok: boolean } | null>(null);
@@ -34,12 +27,11 @@ export default function ModelPreview({ url, size, color, colorMaterials, onMater
     holder: Group;
     outline: Object3D;
     model?: Object3D;
-    originals: Map<Material, Color>;
     frame: (s: Size) => void;
   } | null>(null);
-  const latest = useRef({ size, color, colorMaterials, onMaterials });
+  const latest = useRef({ size });
   useEffect(() => {
-    latest.current = { size, color, colorMaterials, onMaterials };
+    latest.current = { size };
   });
 
   // Renderer, camera, lights and controls.
@@ -102,7 +94,7 @@ export default function ModelPreview({ url, size, color, colorMaterials, onMater
         grid.scale.setScalar(Math.max(0.2, r / 2));
         render();
       };
-      view.current = { three, render, holder, outline, originals: new Map(), frame };
+      view.current = { three, render, holder, outline, frame };
       resize();
       frame(latest.current.size);
       cleanup = () => {
@@ -134,25 +126,9 @@ export default function ModelPreview({ url, size, color, colorMaterials, onMater
         if (cancelled) return;
         if (v.model) v.holder.remove(v.model);
         const model = gltf.scene;
-        v.originals.clear();
-        const names = new Set<string>();
-        model.traverse((o) => {
-          const mesh = o as Mesh;
-          if (!mesh.isMesh) return;
-          // Own copies, so recolouring never touches the cached originals.
-          const own = (m: Material) => {
-            const c = m.clone();
-            if (m.name) names.add(m.name);
-            const col = (c as unknown as { color?: Color }).color;
-            if (col) v.originals.set(c, col.clone());
-            return c;
-          };
-          mesh.material = Array.isArray(mesh.material) ? mesh.material.map(own) : own(mesh.material);
-        });
         v.model = model;
         v.holder.add(model);
         setLoaded({ url, ok: true });
-        latest.current.onMaterials?.([...names].sort((a, b) => a.localeCompare(b)));
       } catch {
         if (!cancelled) setLoaded({ url, ok: false });
       }
@@ -183,18 +159,6 @@ export default function ModelPreview({ url, size, color, colorMaterials, onMater
     v.frame(size);
   }, [size, state]);
 
-  // Recolour the chosen materials; put the rest back to how the file has them.
-  useEffect(() => {
-    const v = view.current;
-    if (!v) return;
-    const chosen = new Set(colorMaterials);
-    for (const [m, original] of v.originals) {
-      const col = (m as unknown as { color: Color }).color;
-      if (chosen.has(m.name)) col.set(color);
-      else col.copy(original);
-    }
-    v.render();
-  }, [color, colorMaterials, state]);
 
   return (
     <div className="relative aspect-[4/3] w-full overflow-hidden rounded-lg border border-line bg-zinc-100">
