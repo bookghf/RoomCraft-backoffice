@@ -53,6 +53,9 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
     mountHeight: start.mountHeight === undefined ? "" : String(start.mountHeight),
     paramsText: JSON.stringify(start.model.params ?? {}, null, 2),
   });
+  // How the apps draw the item: from an uploaded .glb file, or from a built-in template with JSON parameters.
+  const [source, setSource] = useState<"glb" | "template">(start.modelUrl ? "glb" : "template");
+  const useGlb = source === "glb";
   // Count of uploads in progress; saving waits until they finish.
   const [uploads, setUploads] = useState(0);
   const trackUpload = (busy: boolean) => setUploads((n) => Math.max(0, n + (busy ? 1 : -1)));
@@ -60,13 +63,15 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
   const setColor = (i: number, c: Partial<CatalogColor>) => set("colors", v.colors.map((x, j) => (j === i ? { ...x, ...c, name: { ...x.name, ...c.name } } : x)));
 
   const paramsError = useMemo(() => {
+    if (useGlb) return "";
     try {
       const p = JSON.parse(v.paramsText || "{}");
       return p && typeof p === "object" && !Array.isArray(p) ? "" : "Must be a JSON object";
     } catch {
       return "Not valid JSON";
     }
-  }, [v.paramsText]);
+  }, [v.paramsText, useGlb]);
+  const modelMissing = useGlb && !v.modelUrl?.trim();
 
   const payload = useMemo(() => {
     if (paramsError) return "";
@@ -86,11 +91,12 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
       light: !!v.light,
       hidden: !!v.hidden,
       mountHeight: v.mountHeight === "" ? undefined : Number(v.mountHeight),
-      model: { template: v.model.template.trim(), params: modelParams(JSON.parse(v.paramsText || "{}"), !!v.modelUrl?.trim()) },
-      modelUrl: v.modelUrl?.trim() || undefined,
+      // The API always needs a template; .glb items keep theirs but the apps draw the file instead.
+      model: { template: v.model.template.trim() || "shape", params: modelParams(v.paramsText, useGlb) },
+      modelUrl: useGlb ? v.modelUrl?.trim() || undefined : undefined,
       thumbnailUrl: v.thumbnailUrl?.trim() || undefined,
     });
-  }, [v, paramsError]);
+  }, [v, paramsError, useGlb]);
 
   return (
     <form action={action} className="space-y-6">
@@ -166,7 +172,7 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
           </div>
         </section>
 
-        {v.modelUrl ? (
+        {useGlb ? (
           <section>
             <h3 className="mb-1 text-sm font-semibold">Colours</h3>
             <p className="text-xs text-muted">Items with a 3D model always show the model&apos;s own colours, so customers can&apos;t pick a colour. Remove the model to set colours.</p>
@@ -197,45 +203,70 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
         </section>
         )}
 
-        <section className="grid gap-4 lg:grid-cols-2">
-          <div>
-            <h3 className="mb-2 text-sm font-semibold">Thumbnail</h3>
-            <ThumbnailUpload value={v.thumbnailUrl} itemId={v.id} onChange={(url) => set("thumbnailUrl", url)} onBusyChange={trackUpload} disabled={readOnly} />
-          </div>
-          <div>
-            <h3 className="mb-2 text-sm font-semibold">3D model</h3>
-            <ModelUpload value={v.modelUrl} itemId={v.id} onChange={(url, size) => {
-                setV((s) => ({ ...s, modelUrl: url, ...(size ? { size: { w: size.w, d: size.d, h: size.h } } : {}) }));
-              }} onBusyChange={trackUpload} disabled={readOnly} />
-          </div>
+        <section className="max-w-xl">
+          <h3 className="mb-2 text-sm font-semibold">Thumbnail</h3>
+          <ThumbnailUpload value={v.thumbnailUrl} itemId={v.id} onChange={(url) => set("thumbnailUrl", url)} onBusyChange={trackUpload} disabled={readOnly} />
         </section>
 
-        {v.modelUrl && (
-          <section className="max-w-2xl">
-            <div>
-              <h3 className="mb-2 text-sm font-semibold">Preview</h3>
-              <ModelPreview url={v.modelUrl} size={v.size} />
-            </div>
-          </section>
-        )}
-
-        <section className="grid gap-4 sm:grid-cols-3">
-          <Field label="3D template" hint="How the apps draw it until a .glb model is set">
-            <input className="input font-mono" list="templates" value={v.model.template} onChange={(e) => set("model", { ...v.model, template: e.target.value })} required />
-            <datalist id="templates">
-              {templates.map((t) => (
-                <option key={t} value={t} />
+        <section className="space-y-4">
+          <div>
+            <h3 className="mb-2 text-sm font-semibold">3D model</h3>
+            <div role="radiogroup" aria-label="How the apps draw this item" className="inline-flex rounded-lg border border-line p-0.5 text-sm">
+              {(
+                [
+                  ["glb", "Model file (.glb)"],
+                  ["template", "Template (JSON)"],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="radio"
+                  aria-checked={source === key}
+                  onClick={() => setSource(key)}
+                  className={`rounded-md px-3 py-1.5 transition-colors ${source === key ? "bg-brand text-white" : "text-muted hover:text-ink"}`}
+                >
+                  {label}
+                </button>
               ))}
-            </datalist>
-          </Field>
-          <Field label="Template parameters (JSON)" className="sm:col-span-2" hint={paramsError || 'e.g. {"shape":"sofa"} or {"doors":3}'}>
-            <textarea className={`input font-mono text-xs ${paramsError ? "border-rose-400" : ""}`} rows={3} value={v.paramsText} onChange={(e) => set("paramsText", e.target.value)} />
-          </Field>
+            </div>
+            <p className="mt-1 text-xs text-muted">
+              {useGlb
+                ? "The apps draw the uploaded file in its own colours."
+                : "The apps draw a built-in shape from the template and its parameters, in the colours above."}
+            </p>
+          </div>
+
+          {useGlb ? (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div>
+                <ModelUpload value={v.modelUrl} itemId={v.id} onChange={(url, size) => {
+                    setV((s) => ({ ...s, modelUrl: url, ...(size ? { size: { w: size.w, d: size.d, h: size.h } } : {}) }));
+                  }} onBusyChange={trackUpload} disabled={readOnly} />
+                {modelMissing && <p className="mt-2 text-xs text-rose-600">Upload a model file, or switch to Template.</p>}
+              </div>
+              {v.modelUrl && <ModelPreview url={v.modelUrl} size={v.size} />}
+            </div>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field label="Template" hint="Which built-in shape the apps draw">
+                <input className="input font-mono" list="templates" value={v.model.template} onChange={(e) => set("model", { ...v.model, template: e.target.value })} required />
+                <datalist id="templates">
+                  {templates.map((t) => (
+                    <option key={t} value={t} />
+                  ))}
+                </datalist>
+              </Field>
+              <Field label="Template parameters (JSON)" className="sm:col-span-2" hint={paramsError || 'e.g. {"shape":"sofa"} or {"doors":3}'}>
+                <textarea className={`input font-mono text-xs ${paramsError ? "border-rose-400" : ""}`} rows={3} value={v.paramsText} onChange={(e) => set("paramsText", e.target.value)} />
+              </Field>
+            </div>
+          )}
         </section>
       </fieldset>
       {!readOnly && (
         <div className="flex items-center gap-3 border-t border-line pt-4">
-          <SubmitButton disabled={!!paramsError || uploads > 0}>{item ? "Save changes" : "Create item"}</SubmitButton>
+          <SubmitButton disabled={!!paramsError || modelMissing || uploads > 0}>{item ? "Save changes" : "Create item"}</SubmitButton>
           <span className="text-xs text-muted">Saving doesn&apos;t change the apps until the catalog is published.</span>
         </div>
       )}
@@ -243,9 +274,16 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
   );
 }
 
-/** Template parameters to save. "colorMaterials" (part recolouring) is no longer used, so it is dropped from .glb items. */
-function modelParams(params: Record<string, unknown>, hasModel: boolean) {
-  if (!hasModel || !("colorMaterials" in params)) return params;
+/** Template parameters to save. For .glb items the text box is hidden, so bad JSON there is ignored, and the unused "colorMaterials" is dropped. */
+function modelParams(text: string, useGlb: boolean): Record<string, unknown> {
+  let params: Record<string, unknown> = {};
+  try {
+    const p = JSON.parse(text || "{}");
+    if (p && typeof p === "object" && !Array.isArray(p)) params = p;
+  } catch {
+    if (!useGlb) throw new Error("Template parameters are not valid JSON");
+  }
+  if (!useGlb || !("colorMaterials" in params)) return params;
   const rest = { ...params };
   delete rest.colorMaterials;
   return rest;
