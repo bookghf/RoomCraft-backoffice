@@ -5,6 +5,7 @@ import ItemForm from "@/components/ItemForm";
 import { ConfirmButton } from "@/components/forms";
 import { Badge, Card, Dl, NoAccess, PageHeader } from "@/components/ui";
 import { ApiError, api } from "@/lib/api";
+import { DESIGNER_URL } from "@/lib/designer";
 import { restoreItem, retireItem } from "@/lib/actions/catalog";
 import { STATE_HELP, STATE_LABEL, STATE_TONE } from "@/lib/catalog";
 import { brief, dateTime, name, num } from "@/lib/format";
@@ -40,7 +41,7 @@ export default async function ItemPage({ params, searchParams }: PageProps<"/cat
       {created && <p className="mb-6 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">Item created. Publish the catalog to send it to the apps.</p>}
       <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
         <Card>
-          <ItemForm item={item} categories={categories} templates={templates} readOnly={!writable} />
+          <ItemForm item={item} categories={categories} templates={templates} designerUrl={DESIGNER_URL} readOnly={!writable} />
         </Card>
         <div className="space-y-6">
           <Card title="Status">

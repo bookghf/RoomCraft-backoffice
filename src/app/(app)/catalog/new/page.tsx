@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import ItemForm from "@/components/ItemForm";
 import { Card, NoAccess, PageHeader } from "@/components/ui";
+import { DESIGNER_URL } from "@/lib/designer";
 import { api } from "@/lib/api";
 import { can, getSession } from "@/lib/session";
 import type { AdminItem, Category } from "@/lib/types";
@@ -16,7 +17,7 @@ export default async function NewItemPage() {
     <>
       <PageHeader title="New catalog item" back={{ href: "/catalog", label: "Catalog" }} />
       <Card>
-        <ItemForm categories={categories} templates={templates} />
+        <ItemForm categories={categories} templates={templates} designerUrl={DESIGNER_URL} />
       </Card>
     </>
   );

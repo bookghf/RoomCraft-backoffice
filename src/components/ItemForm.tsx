@@ -7,6 +7,8 @@ import { buttonClass } from "./ui";
 import ModelUpload from "./ModelUpload";
 import dynamic from "next/dynamic";
 import ThumbnailUpload from "./ThumbnailUpload";
+import TemplateEditor from "./TemplateEditor";
+import type { FurnitureType, Params } from "@/lib/furnitureTypes";
 import { saveItem } from "@/lib/actions/catalog";
 import type { AdminItem, CatalogColor, Category } from "@/lib/types";
 
@@ -27,7 +29,7 @@ const blank: Omit<AdminItem, "publishState" | "createdAt" | "updatedAt" | "sortO
   priceSatang: 0,
   size: { w: 0.5, d: 0.5, h: 0.5 },
   colors: [{ id: "default", hex: "#c8a27a", name: { en: "Default", th: "", zh: "" } }],
-  model: { template: "shape", params: {} },
+  model: { template: "", params: {} },
 };
 
 function Field({ label, children, hint, className = "" }: { label: string; children: React.ReactNode; hint?: string; className?: string }) {
@@ -44,7 +46,7 @@ function Field({ label, children, hint, className = "" }: { label: string; child
 const ModelPreview = dynamic(() => import("./ModelPreview"), { ssr: false });
 
 /** Create or edit a catalog item. Builds the API payload in the browser and sends it as one JSON field. */
-export default function ItemForm({ item, categories, templates, readOnly }: { item?: AdminItem; categories: Category[]; templates: string[]; readOnly?: boolean }) {
+export default function ItemForm({ item, categories, templates, designerUrl, readOnly }: { item?: AdminItem; categories: Category[]; templates: string[]; designerUrl: string; readOnly?: boolean }) {
   const [state, action] = useActionState(saveItem, {});
   const start = item ?? { ...blank, category: categories[0]?.id ?? "" };
   const [v, setV] = useState({
@@ -72,6 +74,21 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
     }
   }, [v.paramsText, useGlb]);
   const modelMissing = useGlb && !v.modelUrl?.trim();
+  const templateMissing = !useGlb && !v.model.template.trim();
+  const setTemplate = (template: string, params: Params) =>
+    setV((s) => ({ ...s, model: { ...s.model, template }, paramsText: Object.keys(params).length ? JSON.stringify(params, null, 2) : "{}" }));
+  /** A furniture type's typical size, placement and flags. */
+  const applyType = (t: FurnitureType) =>
+    setV((s) => ({
+      ...s,
+      size: { ...t.size },
+      mount: t.mount,
+      mountHeight: t.mountHeight === undefined ? "" : String(t.mountHeight),
+      surface: !!t.flags?.surface,
+      stackable: !!t.flags?.stackable,
+      flat: !!t.flags?.flat,
+      light: !!t.flags?.light,
+    }));
 
   const payload = useMemo(() => {
     if (paramsError) return "";
@@ -233,7 +250,7 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
             <p className="mt-1 text-xs text-muted">
               {useGlb
                 ? "The apps draw the uploaded file in its own colours."
-                : "The apps draw a built-in shape from the template and its parameters, in the colours above."}
+                : "The apps draw a built-in piece of furniture that you shape with the options below, in the colours above."}
             </p>
           </div>
 
@@ -248,25 +265,30 @@ export default function ItemForm({ item, categories, templates, readOnly }: { it
               {v.modelUrl && <ModelPreview url={v.modelUrl} size={v.size} />}
             </div>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-3">
-              <Field label="Template" hint="Which built-in shape the apps draw">
-                <input className="input font-mono" list="templates" value={v.model.template} onChange={(e) => set("model", { ...v.model, template: e.target.value })} required />
-                <datalist id="templates">
-                  {templates.map((t) => (
-                    <option key={t} value={t} />
-                  ))}
-                </datalist>
-              </Field>
-              <Field label="Template parameters (JSON)" className="sm:col-span-2" hint={paramsError || 'e.g. {"shape":"sofa"} or {"doors":3}'}>
-                <textarea className={`input font-mono text-xs ${paramsError ? "border-rose-400" : ""}`} rows={3} value={v.paramsText} onChange={(e) => set("paramsText", e.target.value)} />
-              </Field>
+            <div>
+              <TemplateEditor
+                template={v.model.template}
+                paramsText={v.paramsText}
+                paramsError={paramsError}
+                onTemplate={setTemplate}
+                onTemplateText={(template) => set("model", { ...v.model, template })}
+                onParamsText={(text) => set("paramsText", text)}
+                onApplyType={applyType}
+                size={v.size}
+                mount={v.mount}
+                colors={v.colors}
+                isNew={!item}
+                templates={templates}
+                designerUrl={designerUrl}
+              />
+              {templateMissing && <p className="mt-2 text-xs text-rose-600">Pick a furniture type, or switch to Model file.</p>}
             </div>
           )}
         </section>
       </fieldset>
       {!readOnly && (
         <div className="flex items-center gap-3 border-t border-line pt-4">
-          <SubmitButton disabled={!!paramsError || modelMissing || uploads > 0}>{item ? "Save changes" : "Create item"}</SubmitButton>
+          <SubmitButton disabled={!!paramsError || modelMissing || templateMissing || uploads > 0}>{item ? "Save changes" : "Create item"}</SubmitButton>
           <span className="text-xs text-muted">Saving doesn&apos;t change the apps until the catalog is published.</span>
         </div>
       )}
